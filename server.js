@@ -1,4 +1,5 @@
 const http = require('http');
+const https = require('https');
 const WebSocket = require('ws');
 
 const server = http.createServer((req, res) => {
@@ -8,7 +9,6 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocket.Server({ server });
 
-// rooms: { roomCode: [ {ws, name} ] }
 const rooms = {};
 
 wss.on('connection', function(ws) {
@@ -70,3 +70,12 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, function() {
   console.log('Server listening on port ' + PORT);
 });
+
+// Keep-alive ping every 10 mins to prevent Render free tier spin-down
+setInterval(function() {
+  https.get('https://chat-backend-2ri0.onrender.com', function(res) {
+    console.log('Keep-alive ping:', res.statusCode);
+  }).on('error', function(e) {
+    console.log('Ping error:', e.message);
+  });
+}, 10 * 60 * 1000);
