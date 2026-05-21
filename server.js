@@ -3,38 +3,68 @@ const WebSocket = require('ws');
 
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Chat server is running');
+  res.end('bunny chat server running');
 });
 
 const wss = new WebSocket.Server({ server });
 
-let clients = [];
+// rooms: { roomCode: [ {ws, name} ] }
+const rooms = {};
 
 wss.on('connection', function(ws) {
-  clients.push(ws);
-  console.log('New connection. Total clients:', clients.length);
+  ws.roomCode = null;
+  ws.userName = null;
 
   ws.on('message', function(data) {
-    const message = data.toString();
-    console.log('Message received:', message);
-    // Send to all OTHER clients
-    clients.forEach(function(client) {
-      if (client !== ws && client.readyState === WebSocket.OPEN) {
-        client.send(message);
-      }
-    });
+    var msg;
+    try { msg = JSON.parse(data.toString()); } catch(e) { return; }
+
+    if (msg.type === 'join') {
+      ws.roomCode = msg.code;
+      ws.userName = msg.name;
+      if (!rooms[ws.roomCode]) rooms[ws.roomCode] = [];
+      rooms[ws.roomCode].push(ws);
+      broadcastPresence(ws.roomCode);
+      return;
+    }
+
+    if (msg.type === 'message' && ws.roomCode) {
+      var room = rooms[ws.roomCode] || [];
+      room.forEach(function(client) {
+        if (client !== ws && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'message', name: ws.userName, text: msg.text }));
+        }
+      });
+    }
   });
 
   ws.on('close', function() {
-    clients = clients.filter(function(c) { return c !== ws; });
-    console.log('Client disconnected. Total clients:', clients.length);
+    if (ws.roomCode && rooms[ws.roomCode]) {
+      rooms[ws.roomCode] = rooms[ws.roomCode].filter(function(c) { return c !== ws; });
+      if (rooms[ws.roomCode].length === 0) {
+        delete rooms[ws.roomCode];
+      } else {
+        broadcastPresence(ws.roomCode);
+      }
+    }
   });
 
-  ws.on('error', function(err) {
-    console.log('WebSocket error:', err);
-    clients = clients.filter(function(c) { return c !== ws; });
+  ws.on('error', function() {
+    if (ws.roomCode && rooms[ws.roomCode]) {
+      rooms[ws.roomCode] = rooms[ws.roomCode].filter(function(c) { return c !== ws; });
+    }
   });
 });
+
+function broadcastPresence(roomCode) {
+  var room = rooms[roomCode] || [];
+  var count = room.length;
+  room.forEach(function(client) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ type: 'presence', count: count }));
+    }
+  });
+}
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, function() {
