@@ -25,6 +25,12 @@ wss.on('connection', function(ws) {
       if (!rooms[ws.roomCode]) rooms[ws.roomCode] = [];
       rooms[ws.roomCode].push(ws);
       broadcastPresence(ws.roomCode);
+      // notify others
+      rooms[ws.roomCode].forEach(function(client) {
+        if (client !== ws && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'system', text: msg.name + ' hopped in' }));
+        }
+      });
       return;
     }
 
@@ -45,6 +51,11 @@ wss.on('connection', function(ws) {
         delete rooms[ws.roomCode];
       } else {
         broadcastPresence(ws.roomCode);
+        rooms[ws.roomCode].forEach(function(client) {
+          if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ type: 'system', text: ws.userName + ' hopped away' }));
+          }
+        });
       }
     }
   });
