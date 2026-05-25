@@ -14,42 +14,29 @@ const rooms = {};
 wss.on('connection', function(ws) {
   ws.roomCode = null;
   ws.userName = null;
+  ws.leaveAnnounced = false;
 
-  ws.didLeave = false;
+  function removeFromRoom(notifyLeft) {
+    if (!ws.roomCode || !rooms[ws.roomCode]) return;
 
-  function removeFromRoom(client, code) {
-    if (!code || !rooms[code]) return [];
-    rooms[code] = rooms[code].filter(function(c) { return c !== client; });
-    var remaining = rooms[code].slice();
-    if (rooms[code].length === 0) {
-      delete rooms[code];
-    }
-    return remaining;
-  }
+    var roomCode = ws.roomCode;
+    rooms[roomCode] = rooms[roomCode].filter(function(c) { return c !== ws; });
 
-  function broadcastToRoom(code, payload, exclude) {
-    var room = rooms[code] || [];
-    room.forEach(function(client) {
-      if (client !== exclude && client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(payload));
-      }
-    });
-  }
-
-  function handleLeave(announce) {
-    if (!ws.roomCode || !rooms[ws.roomCode] || ws.didLeave) return;
-    ws.didLeave = true;
-    var code = ws.roomCode;
-    var name = ws.userName || 'somebunny';
-    var remaining = removeFromRoom(ws, code);
-    if (announce && remaining.length > 0) {
-      remaining.forEach(function(client) {
+    if (notifyLeft && ws.userName && rooms[roomCode].length >= 0) {
+      rooms[roomCode].forEach(function(client) {
         if (client.readyState === WebSocket.OPEN) {
-          client.send(JSON.stringify({ type: 'left', name: name }));
+          client.send(JSON.stringify({ type: 'left', name: ws.userName }));
         }
       });
-      broadcastPresence(code);
     }
+
+    if (rooms[roomCode].length === 0) {
+      delete rooms[roomCode];
+    } else {
+      broadcastPresence(roomCode);
+    }
+
+    ws.roomCode = null;
   }
 
   ws.on('message', function(data) {
@@ -59,32 +46,52 @@ wss.on('connection', function(ws) {
     if (msg.type === 'join') {
       ws.roomCode = msg.code;
       ws.userName = msg.name;
-      ws.didLeave = false;
+      ws.leaveAnnounced = false;
       if (!rooms[ws.roomCode]) rooms[ws.roomCode] = [];
       rooms[ws.roomCode].push(ws);
       broadcastPresence(ws.roomCode);
-      broadcastToRoom(ws.roomCode, { type: 'system', text: msg.name + ' hopped in' }, ws);
+      // notify others
+      rooms[ws.roomCode].forEach(function(client) {
+        if (client !== ws && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'system', text: msg.name + ' hopped in' }));
+        }
+      });
       return;
     }
 
     if (msg.type === 'leave') {
-      handleLeave(true);
-      try { ws.close(); } catch(e) {}
+      if (!ws.leaveAnnounced) {
+        ws.leaveAnnounced = true;
+        removeFromRoom(true);
+      }
       return;
     }
 
     if (msg.type === 'message' && ws.roomCode) {
-      broadcastToRoom(ws.roomCode, { type: 'message', name: ws.userName, text: msg.text }, ws);
+      var room = rooms[ws.roomCode] || [];
+      room.forEach(function(client) {
+        if (client !== ws && client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'message', name: ws.userName, text: msg.text }));
+        }
+      });
     }
   });
 
   ws.on('close', function() {
-    handleLeave(true);
+    if (!ws.leaveAnnounced) {
+      ws.leaveAnnounced = true;
+      removeFromRoom(true);
+    } else {
+      removeFromRoom(false);
+    }
   });
 
   ws.on('error', function() {
-    if (ws.roomCode && rooms[ws.roomCode]) {
-      rooms[ws.roomCode] = rooms[ws.roomCode].filter(function(c) { return c !== ws; });
+    if (!ws.leaveAnnounced) {
+      ws.leaveAnnounced = true;
+      removeFromRoom(true);
+    } else {
+      removeFromRoom(false);
     }
   });
 });
