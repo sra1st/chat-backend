@@ -50,12 +50,12 @@ wss.on('connection', function(ws) {
       if (rooms[ws.roomCode].length === 0) {
         delete rooms[ws.roomCode];
       } else {
-        broadcastPresence(ws.roomCode);
         rooms[ws.roomCode].forEach(function(client) {
           if (client.readyState === WebSocket.OPEN) {
             client.send(JSON.stringify({ type: 'system', text: ws.userName + ' hopped away' }));
           }
         });
+        broadcastPresence(ws.roomCode);
       }
     }
   });
