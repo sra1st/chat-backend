@@ -14,9 +14,21 @@ const rooms = {};
 
 function getRoom(code) {
   if (!rooms[code]) {
-    rooms[code] = { clients: [], messageSenders: {} };
+    rooms[code] = { clients: [], messageSenders: {}, cleanupTimer: null };
   }
   return rooms[code];
+}
+
+// Soft-delete: keep empty rooms alive for 30 min so rejoining users find the same room
+function scheduleRoomCleanup(roomCode) {
+  var room = rooms[roomCode];
+  if (!room) return;
+  if (room.cleanupTimer) clearTimeout(room.cleanupTimer);
+  room.cleanupTimer = setTimeout(function() {
+    if (rooms[roomCode] && rooms[roomCode].clients.length === 0) {
+      delete rooms[roomCode];
+    }
+  }, 30 * 60 * 1000);
 }
 
 function safeSend(client, payload) {
@@ -56,7 +68,8 @@ function removeFromRoom(ws, notifyLeft) {
   }
 
   if (room.clients.length === 0) {
-    delete rooms[roomCode];
+    // Don't delete immediately — wait 30 min so rejoining with same code works
+    scheduleRoomCleanup(roomCode);
   } else {
     broadcastPresence(roomCode);
   }
@@ -79,14 +92,31 @@ wss.on('connection', function(ws) {
       ws.leaveAnnounced = false;
 
       var room = getRoom(ws.roomCode);
+
+      // Cancel any pending room deletion since someone is joining
+      if (room.cleanupTimer) {
+        clearTimeout(room.cleanupTimer);
+        room.cleanupTimer = null;
+      }
+
       room.clients.push(ws);
       broadcastPresence(ws.roomCode);
 
+      // Tell existing users that this person joined
       room.clients.forEach(function(client) {
         if (client !== ws) {
           safeSend(client, { type: 'system', text: msg.name + ' hopped in' });
         }
       });
+
+      // Tell the new joiner who is already in the room
+      var existingNames = room.clients
+        .filter(function(c) { return c !== ws && c.userName && c.readyState === WebSocket.OPEN; })
+        .map(function(c) { return c.userName; });
+      if (existingNames.length > 0) {
+        safeSend(ws, { type: 'system', text: existingNames.join(' & ') + ' is already here 🐇' });
+      }
+
       return;
     }
 
@@ -111,6 +141,17 @@ wss.on('connection', function(ws) {
         text: msg.text,
         time: time,
         replyTo: msg.replyTo || null
+      }, ws);
+      return;
+    }
+
+    if (msg.type === 'reaction' && ws.roomCode) {
+      broadcast(ws.roomCode, {
+        type: 'reaction',
+        messageId: msg.messageId,
+        emoji: msg.emoji,
+        userName: ws.userName,
+        action: msg.action || 'add'
       }, ws);
       return;
     }
